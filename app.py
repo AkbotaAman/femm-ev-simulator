@@ -2,11 +2,17 @@ import streamlit as st
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 
-st.set_page_config(page_title="AI FEMM EV Motor Simulator", layout="wide")
+st.set_page_config(page_title="AI FEMM LRK EV Motor Optimizer", layout="wide")
 
-st.title("AI FEMM EV Motor Simulator")
-st.write("Change FEMM-style motor variables and see how the electric car performs.")
+st.title("AI FEMM LRK EV Motor Optimizer")
+st.write(
+    "Change LRK motor parameters like air gap, magnets, coils, and current. "
+    "The app predicts torque and shows how the electric car changes."
+)
 
+# -----------------------------
+# Load ML dataset
+# -----------------------------
 data = pd.read_csv("bldc_data.csv")
 
 X = data[["air_gap", "magnet_thickness", "turns", "current"]]
@@ -15,147 +21,358 @@ y = data["torque"]
 model = RandomForestRegressor(n_estimators=100, random_state=42)
 model.fit(X, y)
 
-st.sidebar.header("FEMM Motor Variables")
+# -----------------------------
+# Sidebar: LRK / FEMM variables
+# -----------------------------
+st.sidebar.header("LRK / FEMM Motor Variables")
 
-air_gap = st.sidebar.slider("Air Gap (mm)", 0.3, 1.0, 0.4)
-magnet_thickness = st.sidebar.slider("Magnet Thickness (mm)", 2.0, 4.0, 2.5)
-turns = st.sidebar.slider("Coil Turns", 60, 140, 90)
-current = st.sidebar.slider("Current (A)", 1, 10, 5)
+fixed_current = st.sidebar.slider("Fixed Current (A)", 1, 20, 8)
 
+air_gap = st.sidebar.slider("Air Gap (mm)", 0.2, 1.5, 0.5)
+magnet_diameter = st.sidebar.slider("Magnet Diameter (mm)", 3, 20, 10)
+magnet_thickness = st.sidebar.slider("Magnet Thickness (mm)", 1.0, 8.0, 4.0)
+coil_diameter = st.sidebar.slider("Coil / Winding Diameter (mm)", 3, 25, 12)
+turns = st.sidebar.slider("Coil Turns", 5, 160, 60)
+
+st.sidebar.divider()
+
+st.sidebar.header("Advanced Motor Geometry")
+
+stator_teeth = st.sidebar.slider("Stator Teeth", 6, 24, 12)
+rotor_poles = st.sidebar.slider("Rotor Poles", 8, 28, 14)
+rotor_radius = st.sidebar.slider("Rotor Radius (mm)", 20, 120, 50)
+stator_radius = st.sidebar.slider("Stator Radius (mm)", 10, 100, 38)
+slot_opening = st.sidebar.slider("Slot Opening Width (mm)", 1, 12, 4)
+pole_arc = st.sidebar.slider("Pole Arc Angle (degrees)", 60, 180, 120)
+
+st.sidebar.divider()
+
+st.sidebar.header("EV System Variables")
+
+battery_voltage = st.sidebar.slider("Battery Voltage (V)", 200, 1000, 400)
+cooling = st.sidebar.slider("Cooling System Level", 1, 10, 5)
+vehicle_mass = st.sidebar.slider("Vehicle Mass (kg)", 800, 2500, 1500)
+
+# -----------------------------
+# ML base prediction
+# -----------------------------
 input_data = pd.DataFrame([{
     "air_gap": air_gap,
     "magnet_thickness": magnet_thickness,
     "turns": turns,
-    "current": current
+    "current": fixed_current
 }])
 
-torque = model.predict(input_data)[0]
+base_torque = model.predict(input_data)[0]
 
-efficiency = max(45, min(96, 82 - air_gap * 12 + magnet_thickness * 3 - current * 1.2))
-heat_risk = max(5, min(100, current * 8 + turns * 0.12 + magnet_thickness * 2))
-battery_drain = max(10, min(100, current * 7 + heat_risk * 0.25))
-acceleration_time = max(2.8, min(15, 12 - torque * 10 + air_gap * 2))
-top_speed = max(60, min(260, 90 + torque * 180 + current * 3))
-ev_range = max(80, min(600, efficiency * 4.8 - current * 12))
+# -----------------------------
+# Engineering-inspired torque model
+# -----------------------------
+torque = base_torque
+torque += magnet_diameter * 0.018
+torque += magnet_thickness * 0.055
+torque += coil_diameter * 0.012
+torque += turns * 0.004
+torque += rotor_radius * 0.004
+torque += pole_arc * 0.0015
+torque += rotor_poles * 0.012
+torque -= air_gap * 0.45
+torque -= slot_opening * 0.018
+torque -= abs(rotor_poles - 14) * 0.01
+torque -= abs(stator_teeth - 12) * 0.008
+torque = max(0.05, torque)
 
-col1, col2 = st.columns(2)
+efficiency = (
+    82
+    - air_gap * 9
+    + magnet_thickness * 1.8
+    + magnet_diameter * 0.3
+    - fixed_current * 0.9
+    - slot_opening * 1.1
+    + cooling * 0.9
+    + pole_arc * 0.025
+    - abs(rotor_poles - 14) * 0.4
+)
+efficiency = max(25, min(97, efficiency))
 
-with col1:
-    st.subheader("Motor Performance")
+heat_risk = (
+    fixed_current * 7
+    + turns * 0.08
+    + magnet_thickness * 1.5
+    + battery_voltage * 0.012
+    - cooling * 6
+    + slot_opening * 0.8
+)
+heat_risk = max(5, min(100, heat_risk))
 
-    st.metric("Predicted Torque", f"{torque:.2f} Nm")
-    st.metric("Efficiency", f"{efficiency:.0f}%")
-    st.metric("Heat Risk", f"{heat_risk:.0f}%")
+battery_drain = (
+    fixed_current * 5.5
+    + heat_risk * 0.25
+    + battery_voltage * 0.008
+    - efficiency * 0.22
+)
+battery_drain = max(5, min(100, battery_drain))
 
+acceleration_time = (
+    12
+    - torque * 5.8
+    + vehicle_mass * 0.002
+    + air_gap * 1.7
+    - rotor_poles * 0.035
+)
+acceleration_time = max(2.1, min(18, acceleration_time))
+
+top_speed = (
+    70
+    + torque * 75
+    + battery_voltage * 0.09
+    + fixed_current * 1.8
+    - rotor_poles * 1.1
+    - vehicle_mass * 0.015
+)
+top_speed = max(45, min(340, top_speed))
+
+ev_range = (
+    efficiency * 5.5
+    - fixed_current * 8
+    - heat_risk * 0.5
+    + cooling * 6
+    - vehicle_mass * 0.035
+)
+ev_range = max(40, min(700, ev_range))
+
+# -----------------------------
+# Baseline comparison
+# -----------------------------
+baseline_torque = 0.75
+baseline_accel = 8.5
+baseline_speed = 160
+baseline_range = 320
+baseline_eff = 78
+baseline_heat = 55
+
+torque_gain = ((torque - baseline_torque) / baseline_torque) * 100
+accel_gain = ((baseline_accel - acceleration_time) / baseline_accel) * 100
+speed_gain = ((top_speed - baseline_speed) / baseline_speed) * 100
+range_gain = ((ev_range - baseline_range) / baseline_range) * 100
+eff_gain = ((efficiency - baseline_eff) / baseline_eff) * 100
+heat_change = ((heat_risk - baseline_heat) / baseline_heat) * 100
+
+# -----------------------------
+# Main metrics
+# -----------------------------
+st.subheader("Main Results")
+
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    st.metric("Torque", f"{torque:.2f} Nm", f"{torque_gain:+.0f}% vs baseline")
+    st.metric("Efficiency", f"{efficiency:.0f}%", f"{eff_gain:+.0f}%")
+
+with c2:
+    st.metric("0–100 km/h", f"{acceleration_time:.1f} sec", f"{accel_gain:+.0f}% faster")
+    st.metric("Top Speed", f"{top_speed:.0f} km/h", f"{speed_gain:+.0f}%")
+
+with c3:
+    st.metric("EV Range", f"{ev_range:.0f} km", f"{range_gain:+.0f}%")
+    st.metric("Battery Drain", f"{battery_drain:.0f}%")
+
+with c4:
+    st.metric("Heat Risk", f"{heat_risk:.0f}%", f"{heat_change:+.0f}%")
+    st.metric("Current", f"{fixed_current} A", "fixed input")
+
+st.divider()
+
+# -----------------------------
+# Progress visualization
+# -----------------------------
+left, right = st.columns(2)
+
+with left:
+    st.subheader("Motor Physics")
     st.write("Torque")
-    st.progress(int(min(100, torque * 140)))
+    st.progress(int(max(0, min(100, torque * 55))))
 
     st.write("Efficiency")
     st.progress(int(efficiency))
 
-    st.write("Heat Risk")
-    st.progress(int(heat_risk))
+    st.write("Thermal Safety")
+    st.progress(int(max(0, min(100, 100 - heat_risk))))
 
-with col2:
-    st.subheader("Electric Car in Action")
+    st.write("Magnetic Coupling")
+    magnetic_coupling = max(0, min(100, 100 - air_gap * 55 + magnet_thickness * 5))
+    st.progress(int(magnetic_coupling))
 
-    st.metric("0–100 km/h Estimate", f"{acceleration_time:.1f} sec")
-    st.metric("Estimated Top Speed", f"{top_speed:.0f} km/h")
-    st.metric("Estimated EV Range", f"{ev_range:.0f} km")
+with right:
+    st.subheader("Electric Car Behavior")
+    st.write("Acceleration")
+    st.progress(int(max(0, min(100, 100 - acceleration_time * 5))))
 
-    st.write("Acceleration Performance")
-    st.progress(int(max(0, min(100, 100 - acceleration_time * 6))))
+    st.write("Top Speed")
+    st.progress(int(max(0, min(100, top_speed / 340 * 100))))
 
-    st.write("Top Speed Potential")
-    st.progress(int(top_speed / 260 * 100))
+    st.write("Range")
+    st.progress(int(max(0, min(100, ev_range / 700 * 100))))
 
-    st.write("EV Range")
-    st.progress(int(ev_range / 600 * 100))
-
-    st.write("Battery Drain")
-    st.progress(int(battery_drain))
+    st.write("Battery Health")
+    st.progress(int(max(0, min(100, 100 - battery_drain))))
 
 st.divider()
 
-st.subheader("EV Simulation")
+# -----------------------------
+# Outcome type generator
+# -----------------------------
+st.subheader("Outcome Type")
 
-if acceleration_time < 5:
-    st.success("🏎️ High-performance EV motor")
-    car_line = "🚗💨💨💨💨💨"
-    speed_label = "The car launches very fast."
-elif acceleration_time < 8:
-    st.info("🚙 Balanced EV motor")
-    car_line = "🚗💨💨💨"
-    speed_label = "The car has good acceleration and reasonable efficiency."
+outcomes = []
+
+if accel_gain > 45 and heat_risk < 70:
+    outcomes.append(("🏎️ Drag Race EV", "Extremely fast launch. Best for short acceleration performance."))
+
+if torque_gain > 60:
+    outcomes.append(("💪 Torque Monster", "Very high torque. Strong for launch, hill climbing, or heavy-load movement."))
+
+if range_gain > 25 and efficiency > 85:
+    outcomes.append(("🔋 Long-Range EV", "Best for distance. Prioritizes efficiency and battery range."))
+
+if efficiency > 88 and heat_risk < 55:
+    outcomes.append(("🌱 Eco Efficiency Setup", "Very efficient and thermally safe. Good for daily energy savings."))
+
+if top_speed > 240:
+    outcomes.append(("🛣️ Highway Cruiser", "High top speed potential. Better for highway performance."))
+
+if heat_risk > 85:
+    outcomes.append(("🚨 Thermal Danger Setup", "Motor may overheat. Reduce current or improve cooling."))
+
+if battery_drain > 78:
+    outcomes.append(("🪫 Battery-Draining Setup", "Strong power demand but poor range sustainability."))
+
+if cooling >= 8 and heat_risk < 65 and fixed_current > 10:
+    outcomes.append(("❄️ Cooling-Optimized Power Setup", "High power is supported by strong cooling."))
+
+if air_gap <= 0.35:
+    outcomes.append(("🧲 Tight Air-Gap Performance Setup", "Strong magnetic coupling, but harder manufacturing tolerance."))
+
+if air_gap >= 1.0:
+    outcomes.append(("🐢 Weak Magnetic Coupling", "Large air gap reduces useful magnetic force and torque."))
+
+if rotor_poles >= 18:
+    outcomes.append(("🌀 Smooth Torque Setup", "More rotor poles can improve smoother low-speed torque."))
+
+if rotor_poles <= 10:
+    outcomes.append(("⚡ High-RPM Leaning Setup", "Lower pole count may favor higher speed but less smooth torque."))
+
+if rotor_radius >= 80:
+    outcomes.append(("🚚 Heavy-Duty Motor", "Large rotor radius supports torque for heavier loads."))
+
+if rotor_radius <= 35:
+    outcomes.append(("🪶 Lightweight Motor", "Smaller rotor is lighter but sacrifices torque."))
+
+if magnet_thickness >= 6 or magnet_diameter >= 16:
+    outcomes.append(("🧲 Overbuilt Magnet Setup", "Strong magnets increase torque but may increase cost and weight."))
+
+if magnet_thickness <= 2:
+    outcomes.append(("💸 Low-Cost Magnet Setup", "Cheaper magnet design, but lower torque potential."))
+
+if slot_opening >= 8:
+    outcomes.append(("⚠️ Magnetic Leakage Setup", "Large slot opening may make winding easier but reduces efficiency."))
+
+if pole_arc >= 150:
+    outcomes.append(("📈 Wide Pole Arc Setup", "Better field coverage and torque, but possible saturation risk."))
+
+if vehicle_mass > 2000 and torque > 1.2:
+    outcomes.append(("🚙 SUV / Heavy EV Setup", "Suitable for heavier electric vehicles."))
+
+if vehicle_mass < 1100 and accel_gain > 30:
+    outcomes.append(("🏁 Lightweight Sport EV", "Light vehicle plus strong torque gives very fast acceleration."))
+
+if fixed_current <= 4 and heat_risk < 35:
+    outcomes.append(("🧊 Cool Safe Setup", "Low current keeps the motor safe, but performance may be limited."))
+
+if fixed_current >= 15 and heat_risk > 70:
+    outcomes.append(("🔥 Experimental High-Current Setup", "Powerful but risky. Needs cooling and FEMM validation."))
+
+if not outcomes:
+    outcomes.append(("🚙 Balanced Daily EV", "Balanced torque, range, heat, and acceleration."))
+
+for title, explanation in outcomes[:5]:
+    st.info(f"{title}: {explanation}")
+
+st.divider()
+
+# -----------------------------
+# Optimization explanation
+# -----------------------------
+st.subheader("Optimization Goal")
+
+st.write(
+    f"Goal: maximize torque at a fixed current of **{fixed_current} A** by changing "
+    "air gap, magnet size, coil size, winding turns, rotor/stator geometry, and pole structure."
+)
+
+if torque_gain > 40:
+    st.success(f"Torque improved by {torque_gain:.0f}% compared to the baseline LRK setup.")
+elif torque_gain > 10:
+    st.info(f"Torque improved by {torque_gain:.0f}%. This is a moderate optimization.")
 else:
-    st.warning("🐢 Weak EV motor setup")
-    car_line = "🚗💨"
-    speed_label = "The car accelerates slowly."
+    st.warning(f"Torque change is only {torque_gain:.0f}%. Try reducing air gap, increasing magnet size, or increasing rotor radius.")
 
-st.markdown(f"## {car_line}")
-st.write(speed_label)
+st.divider()
 
-st.write("### What changed in the car?")
+# -----------------------------
+# Engineering recommendations
+# -----------------------------
+st.subheader("AI Engineering Recommendations")
+
+recommendations = []
 
 if air_gap > 0.7:
-    st.write("Large air gap → weaker magnetic coupling → lower torque → slower acceleration.")
-elif air_gap <= 0.4:
-    st.write("Small air gap → stronger magnetic coupling → higher torque → faster acceleration.")
-else:
-    st.write("Medium air gap → balanced magnetic coupling → stable EV performance.")
+    recommendations.append("Reduce air gap to improve magnetic coupling and torque.")
 
-if current > 8:
-    st.write("High current → more power, but higher heat and battery drain.")
-elif current < 4:
-    st.write("Low current → safer and cooler, but lower power.")
-else:
-    st.write("Moderate current → good balance between power and heat.")
+if magnet_thickness < 3:
+    recommendations.append("Increase magnet thickness to strengthen the magnetic field.")
 
-if magnet_thickness > 3.2:
-    st.write("Thicker magnets → stronger magnetic field, but more weight/cost.")
-elif magnet_thickness < 2.4:
-    st.write("Thin magnets → weaker field, lower torque.")
-else:
-    st.write("Balanced magnet thickness → stable torque and efficiency.")
+if magnet_diameter < 8:
+    recommendations.append("Increase magnet diameter for stronger rotor magnetic field.")
 
-st.divider()
+if coil_diameter < 8:
+    recommendations.append("Increase coil diameter to improve electromagnetic interaction area.")
 
-st.subheader("Before vs After Example")
+if turns < 40:
+    recommendations.append("Increase coil turns for higher torque at the same current.")
 
-before, after = st.columns(2)
+if heat_risk > 75:
+    recommendations.append("Reduce current or increase cooling because heat risk is high.")
 
-with before:
-    st.markdown("### Standard Motor")
-    st.write("Air gap: 0.8 mm")
-    st.write("Torque: lower")
-    st.write("EV effect: slower acceleration")
-    st.progress(40)
-    st.markdown("🚗💨")
+if battery_drain > 75:
+    recommendations.append("Improve efficiency or reduce current to protect EV range.")
 
-with after:
-    st.markdown("### Optimized Motor")
-    st.write("Air gap: 0.4 mm")
-    st.write("Torque: higher")
-    st.write("EV effect: faster acceleration")
-    st.progress(90)
-    st.markdown("🚗💨💨💨💨")
+if slot_opening > 7:
+    recommendations.append("Reduce slot opening to lower magnetic leakage.")
+
+if rotor_radius < 45:
+    recommendations.append("Increase rotor radius if the goal is higher torque.")
+
+if not recommendations:
+    recommendations.append("This setup is already reasonable. Fine-tune air gap and magnet size for more torque.")
+
+for rec in recommendations:
+    st.write("✅ " + rec)
 
 st.divider()
 
-st.subheader("AI Engineering Explanation")
+# -----------------------------
+# Variable explanation
+# -----------------------------
+st.subheader("What Changed Physically?")
 
-if torque > 0.55 and heat_risk < 70:
-    st.success("This motor setup would make the EV accelerate faster without extreme overheating.")
-elif torque > 0.55 and heat_risk >= 70:
-    st.warning("This motor gives strong acceleration, but heat risk is high. A cooling system would be needed.")
-elif efficiency > 88:
-    st.success("This setup is better for EV range because it wastes less energy.")
-elif battery_drain > 75:
-    st.error("This setup drains the battery quickly. It may reduce EV range.")
-else:
-    st.info("This is a moderate EV motor setup: safe, but not fully optimized for speed or range.")
+st.write(f"- Air gap = **{air_gap:.2f} mm**. Smaller gap usually increases magnetic coupling.")
+st.write(f"- Magnet size = **{magnet_diameter} mm diameter**, **{magnet_thickness:.1f} mm thickness**.")
+st.write(f"- Coil size = **{coil_diameter} mm**, with **{turns} turns**.")
+st.write(f"- LRK structure = **{stator_teeth} stator teeth** and **{rotor_poles} rotor poles**.")
+st.write(f"- Rotor radius = **{rotor_radius} mm**.")
 
 st.divider()
 
-st.subheader("Training Dataset")
+st.subheader("ML Dataset Used for Torque Prediction")
 st.dataframe(data)
